@@ -1,0 +1,142 @@
+{
+  "name": "ETH008Core",
+  "type": "com.fibaro.deviceController",
+  "apiVersion": "1.2",
+  "initialProperties": {
+    "viewLayout": {
+      "$jason": {
+        "body": {
+          "header": {
+            "style": {
+              "height": "0"
+            },
+            "title": "quickApp_ETH008Core"
+          },
+          "sections": {
+            "items": [
+              {
+                "components": [
+                  {
+                    "name": "labelConnectionStatus",
+                    "style": {
+                      "weight": "1.2"
+                    },
+                    "text": "Connection: Disconnected",
+                    "type": "label",
+                    "visible": true
+                  },
+                  {
+                    "style": {
+                      "weight": "0.5"
+                    },
+                    "type": "space"
+                  }
+                ],
+                "style": {
+                  "weight": "1.2"
+                },
+                "type": "vertical"
+              },
+              {
+                "components": [
+                  {
+                    "name": "labelStatus",
+                    "style": {
+                      "weight": "1.2"
+                    },
+                    "text": "Status: Initializing",
+                    "type": "label",
+                    "visible": true
+                  },
+                  {
+                    "style": {
+                      "weight": "0.5"
+                    },
+                    "type": "space"
+                  }
+                ],
+                "style": {
+                  "weight": "1.2"
+                },
+                "type": "vertical"
+              }
+            ]
+          }
+        },
+        "head": {
+          "title": "quickApp_ETH008Core"
+        }
+      }
+    },
+    "uiCallbacks": [],
+    "quickAppVariables": [
+      {
+        "name": "TCP_IP",
+        "type": "string",
+        "value": "0.0.0.0"
+      },
+      {
+        "name": "TCP_Port",
+        "type": "string",
+        "value": "0"
+      },
+      {
+        "name": "devicesMap",
+        "type": "string",
+        "value": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "name": "TCP_Password",
+        "type": "string",
+        "value": "?"
+      },
+      {
+        "name": "PulseTime_100ms",
+        "type": "string",
+        "value": "0"
+      }
+    ],
+    "typeTemplateInitialized": true
+  },
+  "files": [
+    {
+      "name": "main",
+      "isMain": true,
+      "isOpen": true,
+      "content": "--\n-- QuickApp for the Devantech ETH008\n-- This QuickApp will take care of the network relay board product: https://www.robot-electronics.co.uk/files/eth008b.pdf\n-- QuickApp source: https://github.com/EggensEng/ETH008-hc3\n--\n\n-- Initialize the plugin\nfunction QuickApp:onInit()\n    self:debug(\"Starting ETH008\")\n\n    -- Sort of \"Enum\"\n    self.stage = {\n            CHECK_DEVICE = \"CHECK_DEVICE\",\n            CHECK_PASSWORD = \"CHECK_PASSWORD\",\n            VERIFY_PASSWORD = \"VERIFY_PASSWORD\",\n            CHECK_STATUS = \"CHECK_STATUS\",\n            HANDLE_BUTTON = \"HANDLE_BUTTON\",\n            READY = \"READY\"\n            }\n\n    -- Init variables\n    self:updateView(\"labelConnectionStatus\", \"text\", \"Connection: Disconnected\")\n    self:updateView(\"labelStatus\", \"text\", \"Status: Initializing\")\n    self.step = self.stage.CHECK_DEVICE\n    self.connectionActive = false\n    self.connectionHeartBeat = false\n    self.connectionHeartBeatMem = false\n    self.connectionTimeout = 0\n    statusArr={} -- Array that will remember all received relay status from TCP connection\n    for i=1, 8 do\n      statusArr[i] = false\n    end\n\n    -- Read stored variables\n    self.devicesMap={}\n    self.password = \"\"\n    self.devicesMap = self:getVariable(\"devicesMap\")\n    self.password = self:getVariable(\"TCP_Password\")\n    self.pulseTime = self:getVariable(\"PulseTime_100ms\")\n    --Pulse time limits\n    if tonumber(self.pulseTime) > 255 then\n        self.pulseTime = 255\n    elseif tonumber(self.pulseTime) < 0 then\n        self.pulseTime = 0\n    end\n\n    -- Initialize the child devices\n    -- Every index relates to the Relay number\n    i = 1\n    for i=1, 8 do\n        stat, ret = pcall(checkDevice, self.devicesMap[i], \"com.fibaro.binarySwitch\" )\n        if stat == false or ret <= 0 then\n            self:createChild(\"Relay\" .. tostring(i), \"com.fibaro.binarySwitch\", i)\n        end\n    end\n\n    -- Setup classes for child devices.\n    self:initChildDevices({\n        [\"com.fibaro.binarySwitch\"] = RelayDevice,\n        [\"com.fibaro.binarySwitch\"] = RelayDevice,\n        [\"com.fibaro.binarySwitch\"] = RelayDevice,\n        [\"com.fibaro.binarySwitch\"] = RelayDevice,\n        [\"com.fibaro.binarySwitch\"] = RelayDevice,\n        [\"com.fibaro.binarySwitch\"] = RelayDevice,\n        [\"com.fibaro.binarySwitch\"] = RelayDevice,\n        [\"com.fibaro.binarySwitch\"] = RelayDevice,\n    })\n\n    -- Print all child devices.\n    for id,device in pairs(self.childDevices) do\n        --self:debug(\"Load child device: [\", id, \"]\", device.name, \", type of: \", device.type)\n    end\n\n    -- Initialize TCP socket\n    self.sock = net.TCPSocket({timeout = 5000})\n    self:connect()\n\n    -- Start main loop\n    setInterval(function() self:MainLoop() end, 2000)\nend\n\n-- Used in combination with pcal to check if a device exist\nfunction checkDevice(deviceId, deviceType)\n    if hub.getType(deviceId) ~= deviceType then\n        return 0\n    else\n        return 1\n    end\nend\n\n-- Handler for all data reveiced from the ETH008\nfunction QuickApp:handleEth008Data(data)\n    -- Debug print raw data\n    --self:debug(\"Data received: \", string.tohex(data))\n    \n    if self.step == self.stage.CHECK_DEVICE then\n        -- Check device type\n        if string.tohex(data:sub(1,1)) == \"13\" then\n            self.step = self.stage.CHECK_PASSWORD\n            --self:debug(\"Device type correct\")\n        else\n            --self:debug(\"Device type wrong\")\n            self:updateView(\"labelStatus\", \"text\", \"Status: Device type wrong\")\n        end\n    elseif (self.step == self.stage.CHECK_PASSWORD) or (self.step == self.stage.VERIFY_PASSWORD) then\n        -- Check password for login\n        dataValue = string.toint(string.tohex(data:sub(1,1)))\n        if (dataValue == 0) and (self.step == self.stage.CHECK_PASSWORD) then\n            --self:debug(\"Password required\")\n            self:send( string.fromhex(\"79\") .. self.password)\n            self.step = self.stage.VERIFY_PASSWORD\n        elseif (dataValue > 0) and (self.step == self.stage.CHECK_PASSWORD) then\n            --self:debug(\"Password valid\")\n            self.step = self.stage.CHECK_STATUS\n        elseif self.step == self.stage.VERIFY_PASSWORD then\n            if dataValue ~= 1 then\n                --self:debug(\"Password wrong\")\n                self:updateView(\"labelStatus\", \"text\", \"Status: Password wrong\")\n            else\n                --self:debug(\"Password correct\")\n            end\n            self.step = self.stage.CHECK_PASSWORD\n        end\n    elseif (self.step == self.stage.CHECK_STATUS) or (self.step == self.stage.READY) then\n        -- Check actual relay status\n        self.step = self.stage.READY\n        self:updateView(\"labelStatus\", \"text\", \"Status: Ready\")\n        statusByte = string.toint(string.tohex(data:sub(1,1)))\n        maskByte = 0x01\n        for i=1, 8 do\n            statusArr[i] = ((statusByte & maskByte) > 0)\n            buttonActual = hub.getValue(self.devicesMap[i], \"state\")\n            if statusArr[i] ~= buttonActual then\n                fibaro.call(self.devicesMap[i], \"setStatus\", tostring(statusArr[i]))\n            end\n            maskByte = maskByte << 1\n        end\n    end\nend\n\n-- Handle manually pressed buttons\nfunction QuickApp:ButtonChangedHandler()\n    if self.step == self.stage.HANDLE_BUTTON then\n        self.step = self.stage.READY\n    end\n    if self.step == self.stage.READY then\n        relayNumber = 0x01\n        for i=1, 8 do\n            buttonActual = hub.getValue(self.devicesMap[i], \"state\")\n            buttonStatus = statusArr[i]\n            if buttonActual ~= buttonStatus then\n                --self:debug(\"Button pressed: \", i)\n                self.step = self.stage.HANDLE_BUTTON\n                statusArr[i] = buttonActual\n                -- Convert pulse time to hex string\n                if tonumber(self.pulseTime) > 15 then\n                    sendPulseTime = string.format(\"%#x\", tonumber(self.pulseTime)):sub(3,4)\n                elseif tonumber(self.pulseTime) == 0 then\n                    sendPulseTime = \"00\"\n                else\n                    sendPulseTime = \"0\" .. string.format(\"%#x\", tonumber(self.pulseTime)):sub(3,3)\n                end\n                -- Set on/off command\n                commandOnOff = \"21\"\n                if statusArr[i] == true then\n                    commandOnOff = \"20\"\n                end\n                -- Sending command for switching relay\n                sendDataPacket = commandOnOff .. \"0\" .. string.format(\"%#x\", i):sub(3,3) .. sendPulseTime\n                --self:debug(\"Sending relay command: \", sendDataPacket)\n                self:send( string.fromhex(sendDataPacket))\n            end\n            relayNumber = relayNumber << 1\n        end\n    end\nend\n\n-- Cyclic main loop\nfunction QuickApp:MainLoop()\n    -- TCP, Check heartbeat signal\n    if connectionHeartBeat == connectionHeartBeatMem then\n        self.connectionTimeout = self.connectionTimeout + 1\n    else\n        self.connectionTimeout = 0\n    end\n    connectionHeartBeatMem = connectionHeartBeat\n\n    -- TCP, Timout on connection\n    if self.connectionTimeout > 5 then\n        self.connectionActive = false\n        self:debug(\"connection timeout\")\n    end\n\n    -- TCP, Handle connection status\n    if self.connectionActive == true then\n        --self:debug(\"connection active\")\n        self:updateView(\"labelConnectionStatus\", \"text\", \"Connection: Connected\")\n    else\n        self:debug(\"connection lost\")\n        self.connectionActive = false\n        self:updateView(\"labelConnectionStatus\", \"text\", \"Connection: Disconnected\")\n        self:connect()\n        return\n    end\n\n    -- Tasks for when connection is active\n    if self.connectionActive == true then\n        -- Check device type\n        if self.step == self.stage.CHECK_DEVICE then\n            self:send( string.fromhex(\"10\") )\n            --self:debug(\"Checking device type\")\n        end\n\n        -- Check password for login\n        if self.step == self.stage.CHECK_PASSWORD then\n            self:send( string.fromhex(\"7a\") )\n            passwordCheck = true\n            --self:debug(\"Checking password\")\n        end\n\n        -- Handle buttons pressed\n        self:ButtonChangedHandler()\n\n        -- Check actual relay status\n        if (self.step == self.stage.CHECK_STATUS) or (self.step == self.stage.READY) then\n            self:send( string.fromhex(\"24\") )\n            --self:debug(\"Request relay status\")\n        end\n    end\nend"
+    },
+    {
+      "name": "RelayDevice",
+      "isMain": false,
+      "isOpen": false,
+      "content": "--\n-- Class for Relay device that will be used on creating new child deviced in use for the plugin\n--\n\n-- Relay child device class\nclass 'RelayDevice' (QuickAppChild)\n    function RelayDevice:__init(device)\n        QuickAppChild.__init(self, device)\n    end\n\n    function RelayDevice:setStatus(value)\n        self:updateProperty(\"value\", value)\n    end\n\n    function RelayDevice:turnOn()\n        self:updateProperty(\"value\", true)\n    end\n\n    function RelayDevice:turnOff()\n        self:updateProperty(\"value\", false)\n    end"
+    },
+    {
+      "name": "Child",
+      "isMain": false,
+      "isOpen": false,
+      "content": "--\n-- Child device creation functions\n--\n\n-- Create a new child device\nfunction QuickApp:createChild(name, type, uid, className)\n    local child = self:createChildDevice({\n        name = name,\n        type = type,\n    }, RelayDevice)\n\n    self:trace(\"Child device created: \", child.id)\n\n    -- Store child device ID in device map\n    self.devicesMap[uid] = child.id\n    self:setVariable(\"devicesMap\", self.devicesMap)\nend"
+    },
+    {
+      "name": "TCP",
+      "isMain": false,
+      "isOpen": false,
+      "content": "--\n-- All functions that are related to TCP/IP communication\n--\n\n-- Attempt a (re-)connection via TCP/IP\nfunction QuickApp:connect()\n    local ip = self:getVariable(\"TCP_IP\")\n    local port = tonumber(self:getVariable(\"TCP_Port\"))\n\n    -- Set a check variable for communication active\n    self.connectionActive = false\n    self.connectionTimeout = 0\n    self.step = self.stage.CHECK_DEVICE\n    self:updateView(\"labelStatus\", \"text\", \"Status: Initializing\")\n\n    self.sock:connect(ip, port, { -- connection to the device with the specified IP and port\n        success = function() -- the function will be triggered if the connection is correct\n            self:debug(\"connected\")\n            self.connectionActive = true\n            self:waitForResponseFunction() -- launching a data readout \"loop\"\n        end,\n        error = function(err) -- a function that will be triggered in case of an incorrect connection, e.g. timeout\n            self:debug(\"connection error\")\n        end,\n    })\nend\n\n-- Cyclic re-check if there is new data to receive\nfunction QuickApp:waitForResponseFunction()\n    self.sock:read({ -- reading a data package from the socket\n        success = function(data)\n            connectionHeartBeat = not connectionHeartBeat\n            self:onDataReceived(data) -- handling of received data\n            fibaro.setTimeout(100, function() self:waitForResponseFunction() end)\n        end,\n        error = function() -- a function that will be called in case of an error when trying to receive data, e.g. disconnecting a socket\n            self:debug(\"response error at receiving\")\n            self.connectionActive = false\n            self:MainLoop()\n        end\n    })\nend\n\n-- Send new data on the communication socket if active\nfunction QuickApp:send(strToSend)\n    self.sock:write(strToSend, {\n        success = function() -- the function that will be triggered when the data is correctly sent\n            --self:debug(\"data sent:\", strToSend)\n        end,\n        error = function(err) -- the function that will be triggered in the event of an error in data transmission\n            self:debug(\"error while sending data\")\n        end\n    })\nend\n\n-- Called when new data is received\nfunction QuickApp:onDataReceived(data)\n    self:handleEth008Data(data)\nend"
+    },
+    {
+      "name": "Conversions",
+      "isMain": false,
+      "isOpen": false,
+      "content": "--\n-- Collection of functions related to conversion of data\n--\n\n-- Convert 4 characters that is represented in HEX to a float\n-- Input: string\n-- Return: Float\nfunction string.tofloat16(hexBytesString)\n    local intH = string.toint(hexBytesString:sub(1,2))\n    local intL = string.toint(hexBytesString:sub(3,4))\n    return ((intH<<8) + intL) / 256.0\nend\n\n-- Convert 2 characters that is represented in HEX to an int\n-- Input: string\n-- Return: Int\nfunction string.toint(charHL)\n    local intH = string.tointSingle(charHL:sub(1,1))\n    local intL = string.tointSingle(charHL:sub(2,2))\n    return (intH << 4) + intL\nend\n\n-- Convert 1 character that is represented in HEX to an int\n-- Input: string\n-- Return: Int\nfunction string.tointSingle(char1)\n    if char1 == \"0\" then\n        return 0\n    end\n\n    local num = tonumber(char1)\n    if num == nil then\n    else\n        if num > 0 or num < 10 then\n            return num\n        end\n    end\n    \n    if char1 == \"A\" then\n        return 10\n    elseif char1 == \"B\" then\n        return 11\n    elseif char1 == \"C\" then\n        return 12\n    elseif char1 == \"D\" then\n        return 13\n    elseif char1 == \"E\" then\n        return 14\n    elseif char1 == \"F\" then\n        return 15\n    end\n\n    return 0\nend\n\nfunction string.toboolean(str)\n    return str == \"true\"\nend\n\nfunction string.fromhex(str)\n    return (str:gsub('..', function (cc)\n        return string.char(tonumber(cc, 16))\n    end))\nend\n\nfunction string.tohex(str)\n    return (str:gsub('.', function (c)\n        return string.format('%02X', string.byte(c))\n    end))\nend"
+    }
+  ]
+}
