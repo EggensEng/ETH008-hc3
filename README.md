@@ -26,6 +26,10 @@ Below 2 images will show how to edit the required variables and set them to the 
 
 <img src="https://github.com/EggensEng/ETH008-hc3/blob/main/images/SetIp.png?raw=true">
 
-Check status to see if connection could be established:
-
+Check status to see if connection could be established.
+Possible "status" messages are:
+- Initializing
+- Device type wrong
+- Password wrong
+- Ready
 <img src="https://github.com/EggensEng/ETH008-hc3/blob/main/images/DeviceStatus.png?raw=true">
